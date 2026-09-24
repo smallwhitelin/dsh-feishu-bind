@@ -275,6 +275,7 @@ await test("手机端不错位：box-sizing 重置 + 输入框字号 ≥16px + �
     assert.match(login, /box-sizing:\s*border-box/, "登录页必须重置 box-sizing，否则 100%+padding 会让输入框与按钮宽度不同");
     assert.match(login, /input[^}]*font-size:16px/, "输入框字号要 ≥16px，否则 iOS 聚焦会放大页面");
     assert.match(login, /button[^}]*width:100%/, "按钮要占满整行");
+    assert.doesNotMatch(login, /\.field\s*\{[^}]*margin/, "统一类不能设 margin —— class 优先级高于元素选择器，会盖掉 button 的间距");
     const gap = /button[^}]*margin:(\d+)px 0 0/.exec(login);
     assert.ok(gap && Number(gap[1]) >= 18, `输入框与按钮之间要留出空隙（当前 ${gap?.[1]}px，至少 18px）`);
     // 带口令 → 绑定主页面
