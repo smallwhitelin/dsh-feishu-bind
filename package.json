@@ -1,6 +1,6 @@
 {
   "name": "dsh-feishu-bind",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "浏览器扫码绑定飞书机器人 for DeepSeek Harness(dsh)：访问一个本机网页就能看到二维码，扫码即建/绑定飞书应用并自动写凭据、重启桥，刷新或点绿勾即可换码重绑。零重依赖（自带的飞书设备码流程）。Browser-based QR binding portal for a dsh Feishu bot — no terminal, no dsh web surface required.",
   "type": "module",
   "main": "lib/index.js",
