@@ -124,7 +124,7 @@ await test("默认配置合理（本机地址 + 本机端口 + 默认识别口�
   assert.equal(c.host, "127.0.0.1");
   assert.equal(typeof c.port, "number");
   assert.ok(c.port > 0 && c.port < 65536);
-  assert.equal(c.token, "dsh", "默认带口令，开箱就有一道门");
+  assert.equal(c.token, "feishu888", "默认带口令，开箱就有一道门");
   assert.equal(c.forceCreate, false);
   assert.equal(c.autoRestart, true);
 });
