@@ -260,6 +260,32 @@ await test("registerApp：tenant_brand=lark 时切到国际站域名再轮询", 
   assert.ok(seen.some((u) => u.includes("accounts.larksuite.com")), "应切换成功后用国际站地址");
 });
 
+
+await test("手机端不错位：box-sizing 重置 + 输入框字号 ≥16px + 二维码自适应", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  const svc = createBindService({
+    config: BASE_CONFIG(dir, { token: "t0ken" }),
+    log: () => {},
+    deps: { registerApp: () => new Promise(() => {}), qrToDataUrl: async () => "data:image/png;base64,X", restart: () => {}, serviceActive: (cb) => cb("active") },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    // 未登录 → 登录页
+    const login = await (await fetch(base + "/")).text();
+    assert.match(login, /box-sizing:\s*border-box/, "登录页必须重置 box-sizing，否则 100%+padding 会让输入框与按钮宽度不同");
+    assert.match(login, /input[^}]*font-size:16px/, "输入框字号要 ≥16px，否则 iOS 聚焦会放大页面");
+    assert.match(login, /button[^}]*width:100%/, "按钮要占满整行");
+    // 带口令 → 绑定主页面
+    const page = await (await fetch(base + "/?k=t0ken")).text();
+    assert.match(page, /\* \{[^}]*box-sizing:border-box/, "主页面同样要有盒模型重置");
+    assert.match(page, /aspect-ratio:1 \/ 1/, "二维码区域要自适应窄屏，不能写死宽度");
+    assert.match(page, /safe-area-inset-left/, "要照顾刘海屏安全区");
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 console.log("\n端到端（注入桩，真 HTTP）");
 
 await test("出码 → 扫码授权 → 写凭据 → 触发重启（更新既有应用）", async () => {
