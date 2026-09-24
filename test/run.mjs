@@ -137,7 +137,12 @@ await test("发布文件里不含任何具体主机痕迹", () => {
     { re: /\bcli_[a-z0-9]{8,}\b/, what: "形如真应用 ID 的串" },
     { re: /\b(localPort|remotePort|remotePort)\b/, what: "端口映射/隧道配置键" },
     { re: /\bsshpass\b/i, what: "免密登录工具" },
-    { re: /(?:^|\s)(?:password|passwd|secret|token)\s*[:=]\s*["'][A-Za-z0-9_\-]{6,}["']/im, what: "硬编码口令" },
+    {
+      // 文档里写的"默认口令示例"（feishu888 / dsh / <你的口令>）不算泄漏；
+      // 其它写死的口令值一律视为泄漏。
+      re: /(?:^|\s)(?:password|passwd|secret|token)\s*[:=]\s*["'](?!feishu888|dsh|<|your|xxx|change|placeholder)[A-Za-z0-9_\-]{6,}["']/im,
+      what: "硬编码口令",
+    },
     { re: /~\/\.ssh|id_rsa|known_hosts/i, what: "SSH 私钥/主机记录" },
   ];
   for (const f of files) {
