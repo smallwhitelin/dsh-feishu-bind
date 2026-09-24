@@ -1,0 +1,19 @@
+# dsh-feishu-bind bundle patch
+#
+# 一行 insert：把「浏览器扫码绑定」插件挂进 profile 的插件树。
+#   id   —— 必须与入口文件导出的 cordis name 一致（'feishu-bind'）
+#   name —— 必须写【包名】，由 profile 的 node_modules 解析到 lib/index.js
+#
+# 需要改默认值时（端口 / 口令 / 服务名 / 文件路径），在 profile 自己的
+# cordis.patch.yml 里按 id 覆盖，不要改这个文件：
+#   - id: feishu-bind
+#     config:
+#       port: 3001
+#       token: '<你的口令>'
+#       serviceUnit: dsh-feishu.service
+- insert:
+    - id: feishu-bind
+      name: 'dsh-feishu-bind'
+      config:
+        host: 127.0.0.1
+        port: 3001

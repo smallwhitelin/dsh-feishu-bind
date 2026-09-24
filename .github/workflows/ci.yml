@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # 测试自带桩，不需要安装任何依赖（宿主包在 CI 里本来就没有）
+      - name: Run tests
+        run: node --import ./test/loader-hook.mjs test/run.mjs
+      - name: Verify the npm package builds
+        run: npm pack --dry-run
