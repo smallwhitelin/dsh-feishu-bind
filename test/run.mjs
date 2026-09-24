@@ -395,6 +395,14 @@ await test("没有日志文件时，退化为按服务状态判断接线", async
   }
 });
 
+
+await test("收尾：不留长定时器（进程能立刻退出）", async () => {
+  await sleep(1400); // 等前面用例里 1.2s 的重启定时器跑完
+  const infos = process.getActiveResourcesInfo?.() ?? [];
+  const timeouts = infos.filter((x) => x === "Timeout").length;
+  assert.ok(timeouts === 0, `残留定时器 ${timeouts} 个（${infos.join(",")}）——通常是有定时器没在结束时清掉`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failures.length} 项`);
 if (failures.length) {
   for (const f of failures) console.error(`\n--- ${f.name}\n${f.error?.stack || f.error}`);
