@@ -20,6 +20,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, createBindService } from "../lib/index.js";
+import { registerApp, buildQrUrl, encodeAddons, decodeAddons, normalizeAddons } from "../lib/register-app.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -123,7 +124,7 @@ await test("默认配置合理（本机地址 + 本机端口 + 无口令）", ()
 });
 
 await test("发布文件里不含任何具体主机痕迹", () => {
-  const files = ["lib/index.js", "cordis.patch.yml", "README.md", "package.json"];
+  const files = ["lib/index.js", "lib/register-app.js", "cordis.patch.yml", "README.md", "package.json"];
   const forbid = [
     { re: /\b(?!127\.0\.0\.1)\d{1,3}(?:\.\d{1,3}){3}\b/, what: "IP 地址（只能出现回环 127.0.0.1）" },
     { re: /\/home\/(?!(?:user|runner|node)\b)[a-z0-9._-]+\//i, what: "绝对家目录路径" },
@@ -142,6 +143,110 @@ await test("发布文件里不含任何具体主机痕迹", () => {
       assert.equal(m, null, `${f} 中出现${what}：${m?.[0]}`);
     }
   }
+});
+
+console.log("\n扫码协议（自带实现，零依赖）");
+
+const jsonRes = (o, status = 200) => ({ status, text: async () => JSON.stringify(o) });
+
+await test("encodeAddons ↔ decodeAddons：gzip + base64url 往返一致", () => {
+  const addons = {
+    scopes: { tenant: ["im:message", "im:resource"] },
+    events: { items: { tenant: ["im.message.receive_v1"] } },
+    callbacks: { items: ["card.action.trigger"] },
+  };
+  const enc = encodeAddons(addons);
+  assert.match(enc, /^[A-Za-z0-9_-]+$/, "只能是 URL 安全字符集");
+  assert.deepEqual(decodeAddons(enc), JSON.parse(JSON.stringify(normalizeAddons(addons))));
+  assert.equal(encodeAddons(addons), enc, "同样的输入必须编码一致（确定性）");
+});
+
+await test("buildQrUrl：授权页参数完整", () => {
+  const url = new URL(buildQrUrl({
+    verificationUri: "https://open.example/page/launcher?user_code=ABCD-1234",
+    source: "my-plugin",
+    appPreset: { name: "我的机器人", desc: "描述" },
+    addons: { scopes: { tenant: ["im:message"] } },
+    appId: "cli_existing",
+  }));
+  assert.equal(url.searchParams.get("from"), "sdk");
+  assert.equal(url.searchParams.get("tp"), "sdk");
+  assert.equal(url.searchParams.get("source"), "node-sdk/my-plugin");
+  assert.equal(url.searchParams.get("name"), "我的机器人");
+  assert.equal(url.searchParams.get("desc"), "描述");
+  assert.equal(url.searchParams.get("clientID"), "cli_existing");
+  assert.equal(url.searchParams.get("user_code"), "ABCD-1234");
+  assert.ok(url.searchParams.get("addons"), "应带上 addons 载荷");
+  assert.equal(new URL(buildQrUrl({ verificationUri: "https://x/y", createOnly: true })).searchParams.get("createOnly"), "true");
+  assert.equal(new URL(buildQrUrl({ verificationUri: "https://x/y" })).searchParams.get("createOnly"), null);
+});
+
+await test("registerApp：begin → 轮询 pending → 成功拿凭据", async () => {
+  const calls = [];
+  let polls = 0;
+  const fakeFetch = async (u, init) => {
+    calls.push({ url: u, body: init.body });
+    const action = new URLSearchParams(init.body).get("action");
+    if (action === "begin") {
+      return jsonRes({ verification_uri_complete: "https://open.example/page/launcher?user_code=UU-11", device_code: "dev1", interval: 0, expires_in: 600 });
+    }
+    polls++;
+    return polls === 1
+      ? jsonRes({ error: "authorization_pending" })
+      : jsonRes({ client_id: "cli_9", client_secret: "sec_9", user_info: { tenant_brand: "feishu" } });
+  };
+  let qr = null;
+  const res = await registerApp(
+    { source: "t", onQRCodeReady: (i) => { qr = i; }, addons: { scopes: { tenant: ["im:message"] } } },
+    { fetch: fakeFetch },
+  );
+  assert.equal(res.client_id, "cli_9");
+  assert.equal(res.client_secret, "sec_9");
+  assert.equal(res.user_info.tenant_brand, "feishu");
+  assert.match(qr.url, /open\.example\/page\/launcher/);
+  assert.match(qr.url, /source=node-sdk%2Ft/);
+  assert.equal(qr.expireIn, 600);
+  assert.equal(calls[0].url, "https://accounts.feishu.cn/oauth/v1/app/registration");
+  assert.match(calls[0].body, /action=begin/);
+  assert.ok(calls.length >= 3, "begin + 至少两次 poll");
+});
+
+await test("registerApp：用户拒绝 / 主动中止都能干净收尾", async () => {
+  const denyFetch = async (u, init) => {
+    const action = new URLSearchParams(init.body).get("action");
+    return action === "begin"
+      ? jsonRes({ verification_uri_complete: "https://x.invalid/a?user_code=1", device_code: "d", interval: 0 })
+      : jsonRes({ error: "access_denied", error_description: "用户拒绝" });
+  };
+  await assert.rejects(() => registerApp({ onQRCodeReady: () => {} }, { fetch: denyFetch }), /用户拒绝/);
+
+  const hangFetch = async (u, init) => {
+    const action = new URLSearchParams(init.body).get("action");
+    return action === "begin"
+      ? jsonRes({ verification_uri_complete: "https://x.invalid/a?user_code=1", device_code: "d", interval: 5 })
+      : jsonRes({ error: "authorization_pending" });
+  };
+  const ac = new AbortController();
+  const p = registerApp({ signal: ac.signal, onQRCodeReady: () => {} }, { fetch: hangFetch });
+  ac.abort();
+  await assert.rejects(() => p, /取消/);
+});
+
+await test("registerApp：tenant_brand=lark 时切到国际站域名再轮询", async () => {
+  const seen = [];
+  let polls = 0;
+  const f = async (u, init) => {
+    seen.push(u);
+    const action = new URLSearchParams(init.body).get("action");
+    if (action === "begin") return jsonRes({ verification_uri_complete: "https://x.invalid/a?user_code=1", device_code: "d", interval: 0 });
+    polls++;
+    return polls === 1
+      ? jsonRes({ user_info: { tenant_brand: "lark" } })
+      : jsonRes({ client_id: "cli_l", client_secret: "s" });
+  };
+  const r = await registerApp({ onQRCodeReady: () => {} }, { fetch: f });
+  assert.equal(r.client_id, "cli_l");
+  assert.ok(seen.some((u) => u.includes("accounts.larksuite.com")), "应切换成功后用国际站地址");
 });
 
 console.log("\n端到端（注入桩，真 HTTP）");

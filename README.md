@@ -28,6 +28,7 @@
 | 预置权限 | 授权页已勾好 `im:message` / `im:message:send_as_bot` / `im:resource` 权限、`im.message.receive_v1` 事件、`card.action.trigger` 回调 |
 | 零 web 依赖 | 插件自带 `node:http`，`inject: []`，没有 dsh web 表面的 profile 也能跑 |
 | 不拖垮 profile | 缺依赖、端口占用、写文件失败都只记日志 + 页面报错，绝不 throw 到插件树 |
+| **零重依赖** | 飞书设备码（扫码注册）流程自带实现（`lib/register-app.js`），不拉 `@larksuiteoapi/node-sdk` 那套重依赖——安装时不会被 pnpm 的构建脚本拦截 |
 | 可测试 | 纯逻辑与外部副作用全部可注入，`npm test` 无需网络和真实 SDK |
 
 ## 安装
@@ -131,8 +132,12 @@ node --import ./test/loader-hook.mjs test/run.mjs
 ```
 
 测试自带宿主包桩（`@deepseek-ai/schemastery` 等缺失时自动回落），不需要网络、不需要真实飞书 SDK：
-覆盖 env 合并、接线判断、配置默认值、**发布文件卫生检查（不许出现主机痕迹）**，
-以及注入桩后的真实 HTTP 端到端（出码 → 授权 → 写凭据 → 触发重启 → 换码重绑、token 口令、`forceCreate` 分支）。
+
+- **纯逻辑**：env 行合并/解析、接线判断、应用 ID 掩码；
+- **扫码协议**：`addons` 的 gzip+base64url 编码往返、二维码 URL 组装、轮询（pending → 成功）、
+  用户拒绝/主动中止、`tenant_brand=lark` 时切国际站域名；
+- **端到端**：起真 HTTP 服务 + 注入桩 → 出码 → 授权 → 写凭据 → 触发重启 → 换码重绑，以及 token 口令、`forceCreate` 分支；
+- **卫生检查**：发布文件里不许出现主机痕迹（IP、绝对家目录、端口映射键、真应用 ID…）。
 
 ## License
 
