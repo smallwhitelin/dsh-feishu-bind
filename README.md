@@ -59,7 +59,7 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
   config:
     host: '127.0.0.1'        # 只监听本机
     port: 3001               # 本机端口
-    token: ''                # 非空 → 访问需带 ?k=<token>
+    token: 'dsh'             # 访问口令（默认 dsh，务必改成自己的；空串=不需要口令）
     envFile: '~/.config/dsh-feishu.env'        # 凭据写这里（你的桥读的 EnvironmentFile）
     stateFile: '~/.dsh/feishu-bind-state.json' # 绑定记录（重启后绿勾仍在）
     serviceUnit: 'dsh-feishu.service'          # 绑定成功后重启的 systemd user 单元
@@ -74,7 +74,7 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `host` / `port` | `127.0.0.1` / `3001` | 监听地址与端口。**默认只监听本机** |
-| `token` | 空 | 访问口令。页面可被本机以外访问时**强烈建议设置** |
+| `token` | **`dsh`** | 访问口令，**默认就是 `dsh`，请改成你自己的**；设成 `''` 则不需要口令。打开页面会先要口令（登录后浏览器记住 30 天，也可用 `?k=<token>` 直接进） |
 | `envFile` | `~/.config/dsh-feishu.env` | 凭据写入位置（按行更新，只动 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_TENANT`，其它键与注释原样保留，文件权限 `600`）。留空 = 不写文件，凭据显示在页面上供手动配置 |
 | `stateFile` | `~/.dsh/feishu-bind-state.json` | 绑定记录，重启后绿勾仍在 |
 | `serviceUnit` | `dsh-feishu.service` | 绑定成功后重启的 systemd user 单元；留空 = 不自动重启 |
@@ -89,7 +89,7 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 
 ## 使用流程
 
-1. 浏览器打开 `http://127.0.0.1:3001/` → 自动出现二维码；
+1. 浏览器打开 `http://127.0.0.1:3001/` → 先输入口令（默认 `dsh`）→ 自动出现二维码；
 2. 飞书 App 扫码 →（首次）确认应用名称 → 授权；**已有应用**会显示更新内容并重新授权；
 3. 页面转圈"已授权，正在写入凭据并重启桥…"，随后变成 **✓ 已绑定，桥已接线**；
 4. 之后在飞书里私聊机器人即可，消息自动进入 dsh；
@@ -103,6 +103,7 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 | GET | `/api/state` | 状态 JSON：`phase` / `qrPng` / `expiresAt` / `appId` / `wired` / `lastReadyAt` / `serviceState` / `log` |
 | POST | `/api/qr` | 开新一轮扫码（作废当前二维码） |
 | POST | `/api/apply` | 手动重写凭据 + 重启桥 |
+| POST | `/api/login` | 提交访问口令（`{"k":"<token>"}`），成功则种 Cookie |
 | GET | `/healthz` | 存活探针 |
 
 `phase`：`idle` → `waiting`（出码等待）→ `authorized` → `applying` → `bound` / `error`。
@@ -112,7 +113,10 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 这个页面**能新建飞书应用并把凭据写进本机**，等价于一个开通入口：
 
 - 插件默认只监听 `127.0.0.1`，本机之外访问不到；
-- 一旦把它暴露到别的设备/网络，请设置 `token`（例如 32 位随机串），访问地址变成 `http://<你的地址>/?k=<token>`；
+- **默认口令是 `dsh`，请改成你自己的**（例如 32 位随机串）；配置里写 `token: ''` 则关闭口令：
+  - 打开页面会先显示**口令输入框**，输入正确后种一个 30 天的 HttpOnly Cookie，之后免输入；
+  - 也可以直接用 `http://<你的地址>/?k=<token>` 进入（适合存书签）；
+  - 未通过校验时，页面只吐登录页，所有 `/api/*` 一律 403；
 - 不设 `token` 时页面顶部会显示醒目警告，此时**任何能访问该地址的人都能扫码绑定**（扫码者需是其飞书租户的管理员，但绑上的应用会归其控制）。
 
 ## 排查

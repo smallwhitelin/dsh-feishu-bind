@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, createBindService } from "../lib/index.js";
+import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, createBindService } from "../lib/index.js";
 import { registerApp, buildQrUrl, encodeAddons, decodeAddons, normalizeAddons } from "../lib/register-app.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -106,6 +106,12 @@ await test("isWiredText: 只认比绑定更新的 ready 行", () => {
   assert.equal(isWiredText("", 0).wired, false);
 });
 
+await test("parseCookies: 解析 Cookie 头", () => {
+  assert.deepEqual(parseCookies("a=1; feishu_bind_key=s3cr3t; b=x%20y"), { a: "1", feishu_bind_key: "s3cr3t", b: "x y" });
+  assert.deepEqual(parseCookies(""), {});
+  assert.deepEqual(parseCookies(undefined), {});
+});
+
 await test("maskSecret: 长串只露头尾", () => {
   assert.equal(maskSecret("cli_ab12cd34ef567890"), "cli_ab12…890");
   assert.equal(maskSecret("short"), "short");
@@ -113,12 +119,12 @@ await test("maskSecret: 长串只露头尾", () => {
 
 console.log("\n配置与卫生检查");
 
-await test("默认配置合理（本机地址 + 本机端口 + 无口令）", () => {
+await test("默认配置合理（本机地址 + 本机端口 + 默认识别口令）", () => {
   const c = Config.parse({});
   assert.equal(c.host, "127.0.0.1");
   assert.equal(typeof c.port, "number");
   assert.ok(c.port > 0 && c.port < 65536);
-  assert.equal(c.token, "");
+  assert.equal(c.token, "dsh", "默认带口令，开箱就有一道门");
   assert.equal(c.forceCreate, false);
   assert.equal(c.autoRestart, true);
 });
@@ -351,7 +357,7 @@ await test("forceCreate=true：不理会既有应用，走新建", async () => {
   }
 });
 
-await test("token 口令：不带 k 一律 403，带了才放行", async () => {
+await test("token 口令：登录页 + Cookie 放行 + 接口校验", async () => {
   const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
   const svc = createBindService({
     config: BASE_CONFIG(dir, { token: "s3cr3t" }),
@@ -360,10 +366,34 @@ await test("token 口令：不带 k 一律 403，带了才放行", async () => {
   });
   const { base, close } = await serve(svc);
   try {
+    // 首页给登录页（不是 403），接口仍拦着
+    const home = await fetch(base + "/");
+    assert.equal(home.status, 200);
+    assert.match(await home.text(), /口令/);
     assert.equal((await fetch(base + "/api/state")).status, 403);
-    assert.equal((await fetch(base + "/")).status, 403);
+
+    // 口令不对 → 401，且不种 Cookie
+    const bad = await fetch(base + "/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ k: "wrong" }) });
+    assert.equal(bad.status, 401);
+    assert.equal(bad.headers.get("set-cookie"), null);
+
+    // 口令正确 → 种 Cookie
+    const ok = await fetch(base + "/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ k: "s3cr3t" }) });
+    assert.equal(ok.status, 200);
+    const cookie = (ok.headers.get("set-cookie") || "").split(";")[0];
+    assert.match(cookie, /^feishu_bind_key=s3cr3t$/);
+
+    // 带 Cookie → 页面与接口都放行
+    assert.equal((await fetch(base + "/", { headers: { cookie } })).status, 200);
+    const st = await fetch(base + "/api/state", { headers: { cookie } });
+    assert.equal(st.status, 200);
+    assert.match(await st.text(), /"phase"/);
+
+    // 老办法（URL 带 ?k=）继续可用
     assert.equal((await getJson(base + "/api/state?k=s3cr3t")).status, 200);
     assert.equal((await fetch(base + "/?k=s3cr3t")).status, 200);
+    assert.equal((await fetch(base + "/?k=nope")).status, 200, "错口令也是登录页");
+    assert.match(await (await fetch(base + "/?k=nope")).text(), /口令/);
   } finally {
     await close();
     rmSync(dir, { recursive: true, force: true });
