@@ -435,6 +435,68 @@ await test("关闭独立实例（independentInstances=false）时，仍按老方
   }
 });
 
+
+await test("页面显示的环境名 = 实际使用的名字（含非法字符会被规范化，两边一致）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  let planned = null;
+  const svc = createBindService({
+    config: BASE_CONFIG(dir),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return new Promise(() => {}); },
+      qrToDataUrl: async () => "data:image/png;base64,W",
+      restart: () => {},
+      serviceActive: (cb) => cb("active"),
+      provision: async (plan) => { planned = plan; return { ok: true }; },
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    const res = await fetch(base + "/api/qr", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ create: true, name: "My Bot 2!" }),
+    });
+    assert.equal((await res.json()).create, true);
+    await sleep(150);
+    const st = (await getJson(base + "/api/state")).body;
+    assert.equal(st.pendingInstance, "my-bot-2", "状态里给的就是规范化后的名字");
+    assert.equal(st.forceCreate, true);
+    // 页面文案必须用同一个字段展示，且输入框是固定 DOM（不随轮询重绘丢焦点）
+    const page = await (await fetch(base + "/")).text();
+    assert.match(page, /id="instname"/, "要有环境名输入框");
+    assert.match(page, /id="newbox"/, "新建入口要是固定 DOM");
+    assert.match(page, /s\.pendingInstance/, "二维码下面的提示要引用这一轮实际的名字");
+    assert.match(page, /dsh-' \+ esc\(s\.pendingInstance\) \+ '\.service/, "提示里要写出对应的服务名");
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await test("默认（复用既有应用）那一轮不显示新环境名字", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  writeFileSync(join(dir, "bridge.env"), "FEISHU_APP_ID=cli_current\n");
+  const svc = createBindService({
+    config: BASE_CONFIG(dir),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return new Promise(() => {}); },
+      qrToDataUrl: async () => "d", restart: () => {}, serviceActive: (cb) => cb("active"),
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    await postJson(base + "/api/qr");
+    await sleep(150);
+    const st = (await getJson(base + "/api/state")).body;
+    assert.equal(st.pendingInstance, null, "更新既有应用时不该有实例名");
+    assert.equal(st.forceCreate, false);
+    assert.equal(st.nextInstanceName.length > 0, true, "仍然给出下一个可用名字供输入框默认值");
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 console.log("\n端到端（注入桩，真 HTTP）");
 
 await test("出码 → 扫码授权 → 写凭据 → 触发重启（更新既有应用）", async () => {
