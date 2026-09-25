@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, createBindService } from "../lib/index.js";
+import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, sanitizeInstanceName, planInstance, createBindService } from "../lib/index.js";
 import { registerApp, buildQrUrl, encodeAddons, decodeAddons, normalizeAddons } from "../lib/register-app.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -321,6 +321,114 @@ await test("页面可选「绑定新应用」：POST /api/qr {create:true} 不�
     assert.equal(body.hasExistingApp, false);
     assert.equal(seenOpts.appId, undefined, "新建时不能带 appId");
     assert.equal((await getJson(base + "/api/state")).body.forceCreate, true, "状态里要反映本次是新建");
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+console.log("\n独立实例（新建应用 = 派生一套环境）");
+
+await test("sanitizeInstanceName：只留小写/数字/连字符", () => {
+  assert.equal(sanitizeInstanceName("Feishu 2"), "feishu-2");
+  assert.equal(sanitizeInstanceName("../../etc/passwd"), "etc-passwd");
+  assert.equal(sanitizeInstanceName(""), "feishu2");
+  assert.equal(sanitizeInstanceName("BAD!!name!!!", "fb2"), "bad-name");
+});
+
+await test("planInstance：独立 DSH_HOME/凭据/单元，profile 与配置共享", () => {
+  const plan = planInstance({
+    name: "feishu3", appId: "cli_new", appSecret: "sec", tenant: "feishu",
+    home: "/h", dshHome: "/h/.dsh", profileName: "feishu",
+    execStart: "/usr/bin/node /usr/bin/dsh --profile feishu", logDir: "/h/logs", sglangKey: "sk-1",
+  });
+  assert.equal(plan.instanceHome, "/h/.dsh-feishu3");
+  assert.equal(plan.envFile, "/h/.config/dsh-feishu3.env");
+  assert.equal(plan.unitName, "dsh-feishu3.service");
+  assert.equal(plan.unitPath, "/h/.config/systemd/user/dsh-feishu3.service");
+  assert.equal(plan.logFile, "/h/logs/dsh-feishu3.log");
+  // 环境：新应用凭据 + 关掉自己的绑定页 + 继承模型 key
+  assert.match(plan.envText, /^FEISHU_APP_ID=cli_new$/m);
+  assert.match(plan.envText, /^FEISHU_APP_SECRET=sec$/m);
+  assert.match(plan.envText, /^DSH_BIND_ENABLED=0$/m);
+  assert.match(plan.envText, /^SGLANG_API_KEY=sk-1$/m);
+  // 单元：独立 DSH_HOME + 自己的 env + 同一 profile + 自己的日志
+  assert.match(plan.unitText, /Environment=DSH_HOME=\/h\/\.dsh-feishu3/);
+  assert.match(plan.unitText, /EnvironmentFile=\/h\/\.config\/dsh-feishu3\.env/);
+  assert.match(plan.unitText, /ExecStart=\/usr\/bin\/node \/usr\/bin\/dsh --profile feishu/);
+  assert.match(plan.unitText, /StandardOutput=append:\/h\/logs\/dsh-feishu3\.log/);
+  // 符号链接：共享 profile 与 settings.yaml / memory
+  const byPath = Object.fromEntries(plan.links.map((l) => [l.path, l.target]));
+  assert.equal(byPath["/h/.dsh-feishu3/profiles/feishu"], "/h/.dsh/profiles/feishu");
+  assert.equal(byPath["/h/.dsh-feishu3/settings.yaml"], "/h/.dsh/settings.yaml");
+  assert.equal(byPath["/h/.dsh-feishu3/memory"], "/h/.dsh/memory");
+  assert.ok(plan.dirs.includes("/h/.dsh-feishu3/sessions"));
+});
+
+await test("新建应用走独立实例：当前实例的 env 不被改动，也不重启", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  const env = join(dir, "bridge.env");
+  writeFileSync(env, "FEISHU_APP_ID=cli_current\nKEEP=1\n");
+  let planned = null; const restarts = [];
+  const svc = createBindService({
+    config: BASE_CONFIG(dir, { independentInstances: true }),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return Promise.resolve({ client_id: "cli_brandnew", client_secret: "s2", user_info: { tenant_brand: "feishu" } }); },
+      qrToDataUrl: async () => "data:image/png;base64,N",
+      restart: () => restarts.push(1),
+      serviceActive: (cb) => cb("active"),
+      provision: async (plan) => { planned = plan; return { ok: true }; },
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    const res = await fetch(base + "/api/qr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ create: true, name: "feishu9" }) });
+    assert.equal(res.status, 200);
+    await sleep(300);
+    assert.ok(planned, "应该派生一个新实例");
+    assert.equal(planned.name, "feishu9");
+    assert.equal(planned.unitName, "dsh-feishu9.service");
+    assert.match(planned.envText, /^FEISHU_APP_ID=cli_brandnew$/m, "新实例用新应用凭据");
+    // 关键：当前实例不动
+    assert.equal(readFileSync(env, "utf8"), "FEISHU_APP_ID=cli_current\nKEEP=1\n", "当前实例的 env 不能被改");
+    await sleep(1300);
+    assert.equal(restarts.length, 0, "不能重启当前实例");
+    const st = (await getJson(base + "/api/state")).body;
+    assert.equal(st.phase, "bound");
+    assert.equal(st.instance.unit, "dsh-feishu9.service");
+    assert.equal(st.independentInstances, true);
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await test("关闭独立实例（independentInstances=false）时，仍按老方式覆盖当前实例", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  const env = join(dir, "bridge.env");
+  writeFileSync(env, "FEISHU_APP_ID=cli_current\n");
+  let provisioned = 0; const restarts = [];
+  const svc = createBindService({
+    config: BASE_CONFIG(dir, { independentInstances: false }),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return Promise.resolve({ client_id: "cli_next", client_secret: "s3" }); },
+      qrToDataUrl: async () => "d",
+      restart: () => restarts.push(1),
+      serviceActive: (cb) => cb("active"),
+      provision: async () => { provisioned += 1; },
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    await fetch(base + "/api/qr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ create: true, name: "x" }) });
+    await sleep(300);
+    assert.equal(provisioned, 0, "不该派生实例");
+    assert.match(readFileSync(env, "utf8"), /FEISHU_APP_ID=cli_next/, "凭据写到当前 env");
+    await sleep(1300);
+    assert.equal(restarts.length, 1, "重启当前实例");
   } finally {
     await close();
     rmSync(dir, { recursive: true, force: true });

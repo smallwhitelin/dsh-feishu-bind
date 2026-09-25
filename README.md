@@ -28,6 +28,7 @@
 | 预置权限 | 授权页已勾好 `im:message` / `im:message:send_as_bot` / `im:resource` 权限、`im.message.receive_v1` 事件、`card.action.trigger` 回调 |
 | 零 web 依赖 | 插件自带 `node:http`，`inject: []`，没有 dsh web 表面的 profile 也能跑 |
 | 不拖垮 profile | 缺依赖、端口占用、写文件失败都只记日志 + 页面报错，绝不 throw 到插件树 |
+| **多机器人并行** | "新建应用"会派生一套**独立实例**（独立 `DSH_HOME`/凭据/systemd 服务，共享同一份插件树），与现有机器人并行运行，互不干扰 |
 | **零重依赖** | 飞书设备码（扫码注册）流程自带实现（`lib/register-app.js`），不拉 `@larksuiteoapi/node-sdk` 那套重依赖——安装时不会被 pnpm 的构建脚本拦截 |
 | 可测试 | 纯逻辑与外部副作用全部可注入，`npm test` 无需网络和真实 SDK |
 
@@ -81,11 +82,35 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 | `logFile` | 空 | 桥日志路径，用于判断"已接线"；留空则按 `serviceUnit` 的运行状态判断 |
 | `appId` | 空 | 指定既有应用（更新+重新授权）；留空取 env 里的 |
 | `forceCreate` | `false` | 强制每次扫码新建应用 |
+| `independentInstances` | `true` | 新建应用时派生独立实例（多机器人并行）；`false` 则覆盖当前实例的凭据 |
+| `profileName` | `feishu`（或 `$DSH_PROFILE`） | 派生实例复用的 profile 名 |
+| `instancePrefix` | `dsh` | 派生实例的 systemd 单元前缀：`dsh-<名字>.service` |
+| `enabled` | `true`（`$DSH_BIND_ENABLED != 0`） | 本实例是否启动绑定页；派生实例自动置 0 |
+| `shareFrom` | `["settings.yaml","memory"]` | 派生实例以符号链接共享的项（相对 `DSH_HOME`） |
 
 ### 从别的设备访问
 
 插件默认只听本机。要让手机/其它电脑打开这个页面，把它接到你能访问的地址上（**端口转发**或**反向代理**，规则自定），
 然后在浏览器打开那个地址即可。若该地址可能被他人访问，请务必设置 `token`，访问时带上 `?k=<token>`。
+
+## 多个机器人（独立实例）
+
+点页面上的 **「用新应用绑定」** → 扫码创建/授权一个新应用 → 插件会**派生一套独立环境**：
+
+```
+<家目录>/.dsh-<名字>/              独立 DSH_HOME：sessions / feishu 映射 / storages 全隔离
+  profiles/<profile>  ──符号链接──► 同一份插件树（插件只维护一份，更新一次全都生效）
+  settings.yaml       ──符号链接──► 共享模型配置
+  memory              ──符号链接──► 共享长期记忆
+<家目录>/.config/dsh-<名字>.env    该实例自己的凭据（新应用）
+~/.config/systemd/user/dsh-<名字>.service   该实例自己的服务，创建后自动 enable --now
+```
+
+- 名字可在页面上填（默认 `feishu2`、`feishu3`…，自动避开重名）；
+- **当前实例完全不动**：不改它的 env、不重启它；
+- 每个实例是**独立的机器人**：各自的应用、各自的会话、各自的上下文；
+- 绑定页只在主实例上跑（派生实例里 `DSH_BIND_ENABLED=0`，不抢端口）；
+- 删除某个实例：`systemctl --user disable --now dsh-<名字>.service`，再删掉它对应用户单元、env 和 `~/.dsh-<名字>/` 即可。
 
 ## 使用流程
 
