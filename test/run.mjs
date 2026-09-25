@@ -289,6 +289,44 @@ await test("手机端不错位：box-sizing 重置 + 输入框字号 ≥16px + �
   }
 });
 
+
+await test("页面可选「绑定新应用」：POST /api/qr {create:true} 不带既有 appId", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  writeFileSync(join(dir, "bridge.env"), "FEISHU_APP_ID=cli_existing\n");
+  let seenOpts = null;
+  const svc = createBindService({
+    config: BASE_CONFIG(dir),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { seenOpts = opts; opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return new Promise(() => {}); },
+      qrToDataUrl: async () => "data:image/png;base64,Z",
+      restart: () => {},
+      serviceActive: (cb) => cb("active"),
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    // 默认：复用 env 里的既有应用
+    let r = await postJson(base + "/api/qr");
+    assert.equal(r.body.create, false);
+    assert.equal(r.body.hasExistingApp, true);
+    assert.equal(seenOpts.appId, "cli_existing");
+
+    // 显式要求新建：不带 appId
+    const res = await fetch(base + "/api/qr", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ create: true }),
+    });
+    const body = await res.json();
+    assert.equal(body.create, true);
+    assert.equal(body.hasExistingApp, false);
+    assert.equal(seenOpts.appId, undefined, "新建时不能带 appId");
+    assert.equal((await getJson(base + "/api/state")).body.forceCreate, true, "状态里要反映本次是新建");
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 console.log("\n端到端（注入桩，真 HTTP）");
 
 await test("出码 → 扫码授权 → 写凭据 → 触发重启（更新既有应用）", async () => {
