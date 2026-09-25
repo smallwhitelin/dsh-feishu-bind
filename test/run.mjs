@@ -69,6 +69,7 @@ const BASE_CONFIG = (dir, extra = {}) => ({
   appDesc: "Test",
   autoRestart: true,
   forceCreate: false,
+  independentInstances: true,
   ...extra,
 });
 
