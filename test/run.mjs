@@ -14,12 +14,12 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, sanitizeInstanceName, planInstance, createBindService } from "../lib/index.js";
+import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, sanitizeInstanceName, planInstance, provisionInstance, createBindService } from "../lib/index.js";
 import { registerApp, buildQrUrl, encodeAddons, decodeAddons, normalizeAddons } from "../lib/register-app.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -492,6 +492,69 @@ await test("默认（复用既有应用）那一轮不显示新环境名字", as
     assert.equal(st.pendingInstance, null, "更新既有应用时不该有实例名");
     assert.equal(st.forceCreate, false);
     assert.equal(st.nextInstanceName.length > 0, true, "仍然给出下一个可用名字供输入框默认值");
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+await test("provisionInstance：用真实 fs 落盘（这条能挡住\"忘了 import\"这类错）", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fb-home-"));
+  mkdirSync(join(home, ".dsh"), { recursive: true });
+  writeFileSync(join(home, ".dsh", "settings.yaml"), "llm: {}\n");
+  const plan = planInstance({
+    name: "feishu7", appId: "cli_p", appSecret: "s", home,
+    dshHome: join(home, ".dsh"), logDir: join(home, "logs"),
+    execStart: "/usr/bin/node /usr/bin/dsh --profile feishu",
+  });
+  const calls = [];
+  const out = await provisionInstance(plan, { exec: async (cmd, args) => { calls.push([cmd, ...(args || [])].join(" ")); return ""; } });
+  assert.ok(out.ok);
+  assert.equal(readFileSync(plan.envFile, "utf8"), plan.envText, "凭据要真写到盘上");
+  assert.ok(existsSync(plan.unitPath), "单元文件要真写到盘上");
+  assert.ok(existsSync(join(plan.instanceHome, "sessions")), "DSH_HOME 目录要建好");
+  assert.equal(
+    realpathSync(join(plan.instanceHome, "settings.yaml")),
+    realpathSync(join(home, ".dsh", "settings.yaml")),
+    "settings.yaml 应是共享的符号链接",
+  );
+  assert.equal(calls.filter((c) => c.includes("daemon-reload")).length, 1);
+  assert.equal(calls.filter((c) => c.includes("enable --now")).length, 1);
+  rmSync(home, { recursive: true, force: true });
+});
+
+await test("创建失败可原地重试：/api/apply 用同一环境名，且不动当前实例", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  const env = join(dir, "bridge.env");
+  writeFileSync(env, "FEISHU_APP_ID=cli_current\n");
+  let attempts = 0; const names = []; const restarts = [];
+  const svc = createBindService({
+    config: BASE_CONFIG(dir),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return Promise.resolve({ client_id: "cli_new", client_secret: "s" }); },
+      qrToDataUrl: async () => "d", restart: () => restarts.push(1), serviceActive: (cb) => cb("active"),
+      provision: async (plan) => { attempts += 1; names.push(plan.name); if (attempts === 1) throw new Error("第一次故意失败"); return { ok: true }; },
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    await fetch(base + "/api/qr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ create: true, name: "feishu8" }) });
+    await sleep(300);
+    let st = (await getJson(base + "/api/state")).body;
+    assert.equal(st.phase, "error");
+    assert.match(st.error, /第一次故意失败/);
+    assert.equal(st.pendingInstance, "feishu8", "失败后仍记得这一轮的环境名");
+    // 原地重试
+    const r = await postJson(base + "/api/apply");
+    assert.equal(r.status, 200);
+    await sleep(200);
+    st = (await getJson(base + "/api/state")).body;
+    assert.equal(st.phase, "bound");
+    assert.deepEqual(names, ["feishu8", "feishu8"], "两次必须用同一个名字");
+    assert.equal(readFileSync(env, "utf8"), "FEISHU_APP_ID=cli_current\n", "当前实例 env 不能被改");
+    assert.equal(restarts.length, 0, "不能重启当前实例");
   } finally {
     await close();
     rmSync(dir, { recursive: true, force: true });
