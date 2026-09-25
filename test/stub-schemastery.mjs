@@ -27,4 +27,5 @@ export default {
   string: () => field(),
   number: () => field(),
   boolean: () => field(),
+  array: () => field(),
 };
