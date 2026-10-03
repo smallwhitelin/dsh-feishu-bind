@@ -122,7 +122,8 @@ await test("maskSecret: 长串只露头尾", () => {
 console.log("\n配置与卫生检查");
 
 await test("默认配置合理（本机地址 + 本机端口 + 默认识别口令）", () => {
-  const c = Config.parse({});
+  // 真包的 schema 是**可调用的**（没有 .parse）；桩已跟着真 API 长，两边都这样用
+  const c = Config({});
   assert.equal(c.host, "127.0.0.1");
   assert.equal(typeof c.port, "number");
   assert.ok(c.port > 0 && c.port < 65536);
