@@ -14,12 +14,12 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync, mkdirSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, sanitizeInstanceName, planInstance, provisionInstance, createBindService } from "../lib/index.js";
+import { Config, parseEnv, mergeEnvText, isWiredText, maskSecret, parseCookies, sanitizeInstanceName, planInstance, provisionInstance, cloneProfileTree, createBindService } from "../lib/index.js";
 import { registerApp, buildQrUrl, encodeAddons, decodeAddons, normalizeAddons } from "../lib/register-app.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -338,7 +338,7 @@ await test("sanitizeInstanceName：只留小写/数字/连字符", () => {
   assert.equal(sanitizeInstanceName("BAD!!name!!!", "fb2"), "bad-name");
 });
 
-await test("planInstance：独立 DSH_HOME/凭据/单元，profile 与配置共享", () => {
+await test("planInstance：独立 DSH_HOME/凭据/单元 + 完全隔离的克隆计划（不再共享）", () => {
   const plan = planInstance({
     name: "feishu3", appId: "cli_new", appSecret: "sec", tenant: "feishu",
     home: "/h", dshHome: "/h/.dsh", profileName: "feishu",
@@ -359,11 +359,15 @@ await test("planInstance：独立 DSH_HOME/凭据/单元，profile 与配置共�
   assert.match(plan.unitText, /EnvironmentFile=\/h\/\.config\/dsh-feishu3\.env/);
   assert.match(plan.unitText, /ExecStart=\/usr\/bin\/node \/usr\/bin\/dsh --profile feishu/);
   assert.match(plan.unitText, /StandardOutput=append:\/h\/logs\/dsh-feishu3\.log/);
-  // 符号链接：共享 profile 与 settings.yaml / memory
-  const byPath = Object.fromEntries(plan.links.map((l) => [l.path, l.target]));
-  assert.equal(byPath["/h/.dsh-feishu3/profiles/feishu"], "/h/.dsh/profiles/feishu");
-  assert.equal(byPath["/h/.dsh-feishu3/settings.yaml"], "/h/.dsh/settings.yaml");
-  assert.equal(byPath["/h/.dsh-feishu3/memory"], "/h/.dsh/memory");
+  // 完全隔离：插件树克隆到自己的树，配置/记忆/技能逐项复制；不再有任何共享符号链接
+  assert.deepEqual(plan.isolate.clone, { src: "/h/.dsh/profiles/feishu", dest: "/h/.dsh-feishu3/dsh-feishu" });
+  assert.equal(plan.isolate.profileLink, "/h/.dsh-feishu3/profiles/feishu");
+  assert.deepEqual(plan.isolate.copyItems, [
+    { from: "/h/.dsh/settings.yaml", to: "/h/.dsh-feishu3/settings.yaml" },
+    { from: "/h/.dsh/memory", to: "/h/.dsh-feishu3/memory" },
+    { from: "/h/.dsh/skills", to: "/h/.dsh-feishu3/skills" },
+  ]);
+  assert.ok(!("links" in plan), "不该再有指向父实例的共享符号链接");
   assert.ok(plan.dirs.includes("/h/.dsh-feishu3/sessions"));
 });
 
@@ -499,13 +503,35 @@ await test("默认（复用既有应用）那一轮不显示新环境名字", as
 });
 
 
-await test("provisionInstance：用真实 fs 落盘（这条能挡住\"忘了 import\"这类错）", async () => {
+await test("provisionInstance：真 fs 落盘 + 完全隔离（挡住\"忘了 import\"和\"还在共享\"）", async () => {
   const home = mkdtempSync(join(tmpdir(), "fb-home-"));
-  mkdirSync(join(home, ".dsh"), { recursive: true });
-  writeFileSync(join(home, ".dsh", "settings.yaml"), "llm: {}\n");
+  const dsh = join(home, ".dsh");
+  // 造一个和真机同形的父实例：profiles/<p> 是符号链接，fork 在**同级** plugins/ 下，
+  // 树里有相对链接（依赖兄弟布局）和 .dsh-module-fallback 的**绝对**链接
+  const tree = join(home, "src-tree");
+  mkdirSync(join(tree, "profile", "node_modules", "@scope"), { recursive: true });
+  mkdirSync(join(tree, "profile", "node_modules", "@deepseek-ai"), { recursive: true });
+  mkdirSync(join(tree, "profile", ".dsh-module-fallback", "node_modules"), { recursive: true });
+  mkdirSync(join(tree, "plugins", "pkg"), { recursive: true });
+  mkdirSync(join(home, "outside-install"), { recursive: true }); // 只读框架依赖（树外）
+  writeFileSync(join(tree, "profile", "cordis.patch.yml"), "[]\n");
+  writeFileSync(join(tree, "plugins", "pkg", "index.js"), "export default 1;\n");
+  writeFileSync(join(tree, "plugins", "pkg", "PATCHES.md"), "# 补丁\n");
+  symlinkSync("../../../plugins/pkg", join(tree, "profile", "node_modules", "@scope", "pkg"));
+  symlinkSync(join(home, "outside-install"), join(tree, "profile", "node_modules", "@deepseek-ai", "dsh"));
+  symlinkSync(join(tree, "plugins", "pkg"), join(tree, "profile", ".dsh-module-fallback", "node_modules", "pkg"));
+
+  mkdirSync(join(dsh, "profiles"), { recursive: true });
+  mkdirSync(join(dsh, "memory"), { recursive: true });
+  mkdirSync(join(dsh, "skills"), { recursive: true });
+  writeFileSync(join(dsh, "settings.yaml"), "llm: {}\n");
+  writeFileSync(join(dsh, "memory", "MEMORY.md"), "- 父实例的记忆\n");
+  writeFileSync(join(dsh, "skills", "s.md"), "# 技能\n");
+  symlinkSync(join(tree, "profile"), join(dsh, "profiles", "feishu"));
+
   const plan = planInstance({
     name: "feishu7", appId: "cli_p", appSecret: "s", home,
-    dshHome: join(home, ".dsh"), logDir: join(home, "logs"),
+    dshHome: dsh, logDir: join(home, "logs"),
     execStart: "/usr/bin/node /usr/bin/dsh --profile feishu",
   });
   const calls = [];
@@ -514,14 +540,46 @@ await test("provisionInstance：用真实 fs 落盘（这条能挡住\"忘了 im
   assert.equal(readFileSync(plan.envFile, "utf8"), plan.envText, "凭据要真写到盘上");
   assert.ok(existsSync(plan.unitPath), "单元文件要真写到盘上");
   assert.ok(existsSync(join(plan.instanceHome, "sessions")), "DSH_HOME 目录要建好");
+
+  const self = join(plan.instanceHome, "dsh-feishu");
+  const link = join(plan.instanceHome, "profiles", "feishu");
+  assert.ok(lstatSync(link).isSymbolicLink());
+  assert.equal(realpathSync(link), join(self, "profile"), "profiles/<p> 要指进自己的副本");
+  assert.notEqual(realpathSync(link), realpathSync(join(dsh, "profiles", "feishu")));
+  assert.ok(existsSync(join(self, "plugins", "pkg", "PATCHES.md")), "同级 plugins/ 要一起复制");
   assert.equal(
-    realpathSync(join(plan.instanceHome, "settings.yaml")),
-    realpathSync(join(home, ".dsh", "settings.yaml")),
-    "settings.yaml 应是共享的符号链接",
+    realpathSync(join(self, "profile", "node_modules", "@scope", "pkg")),
+    join(self, "plugins", "pkg"),
+    "树内相对链接要落在副本上",
   );
+  assert.equal(
+    realpathSync(join(self, "profile", ".dsh-module-fallback", "node_modules", "pkg")),
+    join(self, "plugins", "pkg"),
+    "树内绝对链接（.dsh-module-fallback）也要改指副本",
+  );
+  assert.equal(
+    realpathSync(join(self, "profile", "node_modules", "@deepseek-ai", "dsh")),
+    join(home, "outside-install"),
+    "只读框架依赖保持原样",
+  );
+
+  for (const [rel, text] of [["settings.yaml", "llm: {}\n"], ["memory/MEMORY.md", "- 父实例的记忆\n"], ["skills/s.md", "# 技能\n"]]) {
+    const p = join(plan.instanceHome, rel);
+    assert.ok(!lstatSync(p).isSymbolicLink(), `${rel} 不该是符号链接`);
+    assert.equal(readFileSync(p, "utf8"), text);
+  }
+  writeFileSync(join(plan.instanceHome, "settings.yaml"), "llm: {changed: true}\n");
+  assert.equal(readFileSync(join(dsh, "settings.yaml"), "utf8"), "llm: {}\n", "改副本不该动父实例");
+  writeFileSync(join(self, "plugins", "pkg", "PATCHES.md"), "# 改过了\n");
+  assert.equal(readFileSync(join(tree, "plugins", "pkg", "PATCHES.md"), "utf8"), "# 补丁\n", "fork 副本与父实例互不影响");
+
   assert.equal(calls.filter((c) => c.includes("daemon-reload")).length, 1);
   assert.equal(calls.filter((c) => c.includes("enable --now")).length, 1);
   rmSync(home, { recursive: true, force: true });
+});
+
+await test("cloneProfileTree：源不存在时返回 null（不炸）", () => {
+  assert.equal(cloneProfileTree({ src: join(tmpdir(), "no-such-profile-xyz"), dest: join(tmpdir(), "no-dest-xyz") }), null);
 });
 
 await test("创建失败可原地重试：/api/apply 用同一环境名，且不动当前实例", async () => {
