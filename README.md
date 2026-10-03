@@ -86,6 +86,7 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 | `profileName` | `feishu`（或 `$DSH_PROFILE`） | 派生实例克隆哪份 profile（名字相同，但复制成它自己的一份） |
 | `instancePrefix` | `dsh` | 派生实例的 systemd 单元前缀：`dsh-<名字>.service` |
 | `enabled` | `true`（`$DSH_BIND_ENABLED != 0`） | 本实例是否启动绑定页；派生实例自动置 0 |
+| `logDir` | `<家目录>/logs` | 派生实例的日志目录（也是它们 unit 的 StandardOutput 所在）；面板靠它判断新实例"已接线" |
 
 ### 从别的设备访问
 
@@ -108,6 +109,10 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 - **完全隔离**：派生实例**不共享**父实例的插件树、模型配置、记忆、技能 —— 改任何一个都不影响另一个。
   代价要说清：以后改插件/补丁/配置**要改两份**。
   只读的框架依赖（`~/.npm-global/.../dsh/node_modules/@deepseek-ai` 那批链接）仍然共用：那是库，不是状态。
+- **env 整份继承父实例**：只替换凭据三件套 + 覆盖 `DSH_BIND_ENABLED=0`，其余键（如 `DSH_PERMISSION_MODE`、
+  模型 key）原样带过去 —— 否则新机器人会退回默认权限模式，行为和老机器人不一致。
+- 面板上的"已接线"判断，派生之后看的是**新实例自己的日志与单元**（`<logDir>/dsh-<名字>.log`），
+  不会拿当前实例的日志去比时间戳（那样会一直显示"等待桥重启接线"）。
 - 名字可在页面上填（默认 `feishu2`、`feishu3`…，自动避开重名）；
 - **当前实例完全不动**：不改它的 env、不重启它；
 - 每个实例是**独立的机器人**：各自的应用、各自的会话、各自的上下文、各自的配置和记忆；

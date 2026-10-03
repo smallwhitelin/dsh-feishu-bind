@@ -64,6 +64,7 @@ const BASE_CONFIG = (dir, extra = {}) => ({
   stateFile: join(dir, "bind-state.json"),
   serviceUnit: "some-bridge.service",
   logFile: "",
+  logDir: join(dir, "logs"),
   appId: "",
   appName: "Test App",
   appDesc: "Test",
@@ -371,6 +372,19 @@ await test("planInstance：独立 DSH_HOME/凭据/单元 + 完全隔离的克隆
   assert.ok(plan.dirs.includes("/h/.dsh-feishu3/sessions"));
 });
 
+await test("planInstance：派生实例的 env 整份继承父实例，只替换凭据三件套", () => {
+  const parent = "# 注释\nFEISHU_APP_ID=cli_old\nSGLANG_API_KEY=sk-old\nDSH_PERMISSION_MODE=danger-full-access\n";
+  const plan = planInstance({
+    name: "feishu9", appId: "cli_new", appSecret: "sec", tenant: "feishu",
+    home: "/h", dshHome: "/h/.dsh", parentEnvText: parent,
+  });
+  assert.match(plan.envText, /^DSH_PERMISSION_MODE=danger-full-access$/m, "父实例的键必须继承");
+  assert.match(plan.envText, /^SGLANG_API_KEY=sk-old$/m, "没显式传 sglangKey 时保留父实例的");
+  assert.match(plan.envText, /^FEISHU_APP_ID=cli_new$/m, "凭据换成新的");
+  assert.equal((plan.envText.match(/^FEISHU_APP_ID=/gm) || []).length, 1, "不能重复出现");
+  assert.match(plan.envText, /^DSH_BIND_ENABLED=0$/m);
+});
+
 await test("新建应用走独立实例：当前实例的 env 不被改动，也不重启", async () => {
   const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
   const env = join(dir, "bridge.env");
@@ -396,6 +410,7 @@ await test("新建应用走独立实例：当前实例的 env 不被改动，也
     assert.equal(planned.name, "feishu9");
     assert.equal(planned.unitName, "dsh-feishu9.service");
     assert.match(planned.envText, /^FEISHU_APP_ID=cli_brandnew$/m, "新实例用新应用凭据");
+    assert.match(planned.envText, /^KEEP=1$/m, "父实例 env 的其它键必须继承（否则会丢 DSH_PERMISSION_MODE 这类键）");
     // 关键：当前实例不动
     assert.equal(readFileSync(env, "utf8"), "FEISHU_APP_ID=cli_current\nKEEP=1\n", "当前实例的 env 不能被改");
     await sleep(1300);
@@ -404,6 +419,40 @@ await test("新建应用走独立实例：当前实例的 env 不被改动，也
     assert.equal(st.phase, "bound");
     assert.equal(st.instance.unit, "dsh-feishu9.service");
     assert.equal(st.independentInstances, true);
+  } finally {
+    await close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await test("派生实例：接线判断看它自己的日志与单元（页面不再卡在\"等待接线\"）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "feishu-bind-"));
+  const logs = join(dir, "logs");
+  mkdirSync(logs, { recursive: true });
+  writeFileSync(join(dir, "current.log"), "[2020-01-01T00:00:00.000Z] feishu [info] feishu long connection ready\n");
+  const svc = createBindService({
+    config: BASE_CONFIG(dir, { independentInstances: true, logFile: join(dir, "current.log") }),
+    log: () => {},
+    deps: {
+      registerApp: (opts) => { opts.onQRCodeReady({ url: "https://x.invalid/y", expireIn: 60 }); return Promise.resolve({ client_id: "cli_brand", client_secret: "s" }); },
+      qrToDataUrl: async () => "d",
+      restart: () => {},
+      serviceActive: (cb) => cb("active"),
+      provision: async (plan) => {
+        // 派生实例起来后会在**它自己的**日志里写 ready；当前实例的日志（2020 年）比 boundAt 老
+        writeFileSync(join(logs, `dsh-${plan.name}.log`), "[2099-01-01T00:00:00.000Z] feishu [info] feishu long connection ready\n");
+        return { ok: true };
+      },
+    },
+  });
+  const { base, close } = await serve(svc);
+  try {
+    await fetch(base + "/api/qr", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ create: true, name: "feishu9" }) });
+    await sleep(300);
+    const st = (await getJson(base + "/api/state")).body;
+    assert.equal(st.phase, "bound");
+    assert.equal(st.instance.name, "feishu9");
+    assert.equal(st.wired, true, "要看派生实例自己的日志，别拿当前实例的日志比时间戳");
   } finally {
     await close();
     rmSync(dir, { recursive: true, force: true });
