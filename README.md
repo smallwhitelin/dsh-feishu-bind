@@ -178,3 +178,15 @@ node --import ./test/loader-hook.mjs test/run.mjs
 ## License
 
 MIT
+
+---
+
+## Windows 变体（无 systemd）
+
+见 [`windows/`](windows/)：同一件事的 Windows 实现（计划任务代替 systemd 用户单元），
+含「扫码 → 建**完全隔离**实例 → 起服务」全流程与隔离审计工具。
+
+- 隔离语义与 v0.4.x 一致：插件树 / 补丁 / 配置 / 记忆 / 会话 / 凭据各持副本，只读框架依赖共用；
+- 审计：`node windows/verify-iso.js <实例名>`（退出码 = 不合格项数，实测 17/17 通过）；
+- 实测代价：每实例约 93 MB 磁盘 / 230 MB 内存，创建约 2 秒；
+- 两个 Windows 侧的坑：`fs.cpSync` 不复制 junction（必须自己遍历复制）、`.cmd`/`.ps1` 必须 CRLF。
