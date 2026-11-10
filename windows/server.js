@@ -20,14 +20,15 @@ import { execSync } from "node:child_process";
 import QRCode from "qrcode";
 import { registerApp } from "./register-app.js";
 import { create as provisionCreate, start as provisionStart, instancePaths } from "./provision.js";
+import { P } from "./platform.js";
 
 const CFG = {
   host: process.env.BIND_HOST || "127.0.0.1",
   port: Number(process.env.BIND_PORT || 3001),
-  token: process.env.BIND_TOKEN || "linfeishu888",
+  token: process.env.BIND_TOKEN || "feishu888",
   appName: process.env.BIND_APP_NAME || "feishu2",     // 应用名/实例名的默认值（页面会算 nextInstanceName）
-  workspaceRoot: process.env.BIND_WORKSPACE_ROOT || "D:\\",
-  dshHomeRoot: process.env.BIND_DSH_HOME_ROOT || "D:\\dsh",
+  workspaceRoot: process.env.BIND_WORKSPACE_ROOT || P.workspaceRoot,
+  dshHomeRoot: process.env.BIND_DSH_HOME_ROOT || P.instanceRoot,
   store: process.env.BIND_STORE || path.join(process.cwd(), "last-app.json"),
   log: process.env.BIND_LOG || path.join(process.cwd(), "bind.log"),
 };
