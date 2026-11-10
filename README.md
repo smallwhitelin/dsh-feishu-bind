@@ -83,7 +83,7 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
 | `appId` | 空 | 指定既有应用（更新+重新授权）；留空取 env 里的 |
 | `forceCreate` | `false` | 强制每次扫码新建应用 |
 | `independentInstances` | `true` | 新建应用时派生独立实例（多机器人并行）；`false` 则覆盖当前实例的凭据 |
-| `profileName` | `feishu`（或 `$DSH_PROFILE`） | 派生实例克隆哪份 profile（名字相同，但复制成它自己的一份） |
+| `profileName` | 自动探测：`--profile` → `DSH_PROFILE` → 回退 `feishu` | 派生实例克隆哪份 profile（名字相同，但复制成它自己的一份） |
 | `instancePrefix` | `dsh` | 派生实例的 systemd 单元前缀：`dsh-<名字>.service` |
 | `enabled` | `true`（`$DSH_BIND_ENABLED != 0`） | 本实例是否启动绑定页；派生实例自动置 0 |
 | `logDir` | `<家目录>/logs` | 派生实例的日志目录（也是它们 unit 的 StandardOutput 所在）；面板靠它判断新实例"已接线" |
