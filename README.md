@@ -175,6 +175,22 @@ node --import ./test/loader-hook.mjs test/run.mjs
 - **端到端**：起真 HTTP 服务 + 注入桩 → 出码 → 授权 → 写凭据 → 触发重启 → 换码重绑，以及 token 口令、`forceCreate` 分支；
 - **卫生检查**：发布文件里不许出现主机痕迹（IP、绝对家目录、端口映射键、真应用 ID…）。
 
+## 兼容性 / Compatibility
+
+| 项 | 要求 |
+|---|---|
+| dsh | `>=0.2.2-rc.1 <0.3.0`（已在 **dsh 0.2.2-rc.1** 实测通过） |
+| Node | ≥ 24 |
+| 宿主包 | `@deepseek-ai/cordis`（由 dsh 提供） |
+
+实测项（0.2.2-rc.1，headless profile + 真实模型链路）：
+
+- 插件挂载后 HTTP 服务正常起来（默认 `127.0.0.1:3001`），`GET /` 与 `GET /?k=<口令>` 均返回 200；
+- 单元/端到端测试 30 项全过（`node --import ./test/loader-hook.mjs test/run.mjs`），
+  含真 HTTP 出码 → 授权 → 写凭据 → 触发重启的完整链路（宿主以桩注入）。
+
+> 0.1.x 的 dsh 不在兼容范围内，请使用 0.4.1 及更早版本。
+
 ## License
 
 MIT
