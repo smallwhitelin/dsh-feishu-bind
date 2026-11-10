@@ -362,8 +362,10 @@ await test("planInstance：独立 DSH_HOME/凭据/单元 + 完全隔离的克隆
   assert.match(plan.unitText, /ExecStart=\/usr\/bin\/node \/usr\/bin\/dsh --profile feishu/);
   assert.match(plan.unitText, /StandardOutput=append:\/h\/logs\/dsh-feishu3\.log/);
   // 完全隔离：插件树克隆到自己的树，配置/记忆/技能逐项复制；不再有任何共享符号链接
-  assert.deepEqual(plan.isolate.clone, { src: "/h/.dsh/profiles/feishu", dest: "/h/.dsh-feishu3/dsh-feishu" });
-  assert.equal(plan.isolate.profileLink, "/h/.dsh-feishu3/profiles/feishu");
+  assert.deepEqual(plan.isolate.clone, { src: "/h/.dsh/profiles/feishu", dest: "/h/.dsh-feishu3/dsh-feishu3", as: "feishu3" });
+  assert.equal(plan.isolate.profileLink, "/h/.dsh-feishu3/profiles/feishu3");
+  // profile 名 = 环境名：派生实例的 ExecStart 不再沿用父实例的 profile
+  assert.match(plan.unitText, /ExecStart=.*--profile feishu3/);
   assert.deepEqual(plan.isolate.copyItems, [
     { from: "/h/.dsh/settings.yaml", to: "/h/.dsh-feishu3/settings.yaml" },
     { from: "/h/.dsh/memory", to: "/h/.dsh-feishu3/memory" },
@@ -595,24 +597,24 @@ await test("provisionInstance：真 fs 落盘 + 完全隔离（挡住\"忘了 im
   assert.ok(existsSync(join(plan.instanceHome, "sessions")), "DSH_HOME 目录要建好");
   assert.ok(existsSync(join(plan.instanceHome, "workspace")), "实例自己的 workspace 目录要建好");
 
-  const self = join(plan.instanceHome, "dsh-feishu");
-  const link = join(plan.instanceHome, "profiles", "feishu");
+  const self = join(plan.instanceHome, "dsh-feishu7");
+  const link = join(plan.instanceHome, "profiles", "feishu7");
   assert.ok(lstatSync(link).isSymbolicLink());
-  assert.equal(realpathSync(link), join(self, "profile"), "profiles/<p> 要指进自己的副本");
+  assert.equal(realpathSync(link), join(self, "feishu7"), "profiles/<p> 要指进自己的副本");
   assert.notEqual(realpathSync(link), realpathSync(join(dsh, "profiles", "feishu")));
   assert.ok(existsSync(join(self, "plugins", "pkg", "PATCHES.md")), "同级 plugins/ 要一起复制");
   assert.equal(
-    realpathSync(join(self, "profile", "node_modules", "@scope", "pkg")),
+    realpathSync(join(self, "feishu7", "node_modules", "@scope", "pkg")),
     join(self, "plugins", "pkg"),
     "树内相对链接要落在副本上",
   );
   assert.equal(
-    realpathSync(join(self, "profile", ".dsh-module-fallback", "node_modules", "pkg")),
+    realpathSync(join(self, "feishu7", ".dsh-module-fallback", "node_modules", "pkg")),
     join(self, "plugins", "pkg"),
     "树内绝对链接（.dsh-module-fallback）也要改指副本",
   );
   assert.equal(
-    realpathSync(join(self, "profile", "node_modules", "@deepseek-ai", "dsh")),
+    realpathSync(join(self, "feishu7", "node_modules", "@deepseek-ai", "dsh")),
     join(home, "outside-install"),
     "只读框架依赖保持原样",
   );
@@ -856,3 +858,10 @@ if (failures.length) {
   for (const f of failures) console.error(`\n--- ${f.name}\n${f.error?.stack || f.error}`);
   process.exit(1);
 }
+
+await test("derivedPortArgs：父实例是 web 服务时给派生实例换端口，避免 EADDRINUSE 反复重启", async () => {
+  const m = await import("../lib/index.js");
+  assert.equal(m.derivedPortArgs("/usr/bin/node /usr/bin/dsh --profile web --no-open"), " --port 0");
+  assert.equal(m.derivedPortArgs("/usr/bin/node /usr/bin/dsh --profile web --port 3080"), "");
+  assert.equal(m.derivedPortArgs("/usr/bin/node /usr/bin/dsh --profile feishu"), "");
+});

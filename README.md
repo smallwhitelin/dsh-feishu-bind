@@ -29,6 +29,8 @@
 | 零 web 依赖 | 插件自带 `node:http`，`inject: []`，没有 dsh web 表面的 profile 也能跑 |
 | 不拖垮 profile | 缺依赖、端口占用、写文件失败都只记日志 + 页面报错，绝不 throw 到插件树 |
 | **多机器人并行** | "新建应用"会派生一套**完全隔离**的实例（独立 `DSH_HOME`/凭据/systemd 服务，插件树·模型配置·记忆·技能**各持一份副本**），与现有机器人并行运行，互不干扰 |
+| **profile 名 = 环境名** | 派生实例的 profile 就叫 `feishu2`（而不是沿用父实例的名字），`--profile feishu2` + `DSH_HOME=~/.dsh-feishu2`，两边同名不同家，不会串 |
+| **端口自动让开** | 父实例是 web 服务时，派生实例自动加 `--port 0`（系统分配空闲端口），避免 EADDRINUSE 反复重启；也可用 `derivedArgs` 自定义 |
 | **零重依赖** | 飞书设备码（扫码注册）流程自带实现（`lib/register-app.js`），不拉 `@larksuiteoapi/node-sdk` 那套重依赖——安装时不会被 pnpm 的构建脚本拦截 |
 | 可测试 | 纯逻辑与外部副作用全部可注入，`npm test` 无需网络和真实 SDK |
 
