@@ -102,11 +102,14 @@ systemctl --user restart dsh-<你的桥>.service   # 或你启动 dsh 的其它�
   dsh-<profile>/profile    ← 插件树的**副本**（含它引用的 plugins/ 等同级条目）
   profiles/<profile>  ──符号链接──► 上面那份副本（**不是**父实例的）
   settings.yaml / memory / skills    ← 逐项**复制**的副本
+  workspace/                         ← 该实例自己的工作目录（沙箱根，agent 读写的文件都落在这里）
 <家目录>/.config/dsh-<名字>.env    该实例自己的凭据（新应用）
 ~/.config/systemd/user/dsh-<名字>.service   该实例自己的服务，创建后自动 enable --now
 ```
 
-- **完全隔离**：派生实例**不共享**父实例的插件树、模型配置、记忆、技能 —— 改任何一个都不影响另一个。
+- **完全隔离**：派生实例**不共享**父实例的插件树、模型配置、记忆、技能、**工作目录** —— 改任何一个都不影响另一个。
+  服务的 `WorkingDirectory` 指向 `<家目录>/.dsh-<名字>/workspace`，dsh 的沙箱根取 `process.cwd()`，
+  所以两个机器人各自在文件上的操作互不可见。
   代价要说清：以后改插件/补丁/配置**要改两份**。
   只读的框架依赖（`~/.npm-global/.../dsh/node_modules/@deepseek-ai` 那批链接）仍然共用：那是库，不是状态。
 - **env 整份继承父实例**：只替换凭据三件套 + 覆盖 `DSH_BIND_ENABLED=0`，其余键（如 `DSH_PERMISSION_MODE`、

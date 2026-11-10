@@ -371,6 +371,9 @@ await test("planInstance：独立 DSH_HOME/凭据/单元 + 完全隔离的克隆
   ]);
   assert.ok(!("links" in plan), "不该再有指向父实例的共享符号链接");
   assert.ok(plan.dirs.includes("/h/.dsh-feishu3/sessions"));
+  // 工作目录也要独立：单元串口指向实例自己的 workspace，且建现时把它建出来
+  assert.ok(plan.dirs.includes("/h/.dsh-feishu3/workspace"), "实例要有自己的 workspace 目录");
+  assert.match(plan.unitText, /WorkingDirectory=\/h\/\.dsh-feishu3\/workspace/, "沙箱根要指到实例自己的 workspace");
 });
 
 await test("planInstance：派生实例的 env 整份继承父实例，只替换凭据三件套", () => {
@@ -590,6 +593,7 @@ await test("provisionInstance：真 fs 落盘 + 完全隔离（挡住\"忘了 im
   assert.equal(readFileSync(plan.envFile, "utf8"), plan.envText, "凭据要真写到盘上");
   assert.ok(existsSync(plan.unitPath), "单元文件要真写到盘上");
   assert.ok(existsSync(join(plan.instanceHome, "sessions")), "DSH_HOME 目录要建好");
+  assert.ok(existsSync(join(plan.instanceHome, "workspace")), "实例自己的 workspace 目录要建好");
 
   const self = join(plan.instanceHome, "dsh-feishu");
   const link = join(plan.instanceHome, "profiles", "feishu");
