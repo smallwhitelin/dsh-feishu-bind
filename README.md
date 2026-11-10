@@ -196,6 +196,29 @@ node --import ./test/loader-hook.mjs test/run.mjs
 
 > 0.1.x 的 dsh 不在兼容范围内，请使用 0.4.1 及更早版本。
 
+### dsh 0.2.x 需要一次性补丁：让提问卡片可达
+
+dsh 0.2.x 的 `dsh-user-questions` 用 **Agent 作用域** 派发 `user-questions/request`
+（`ctx.waterfall(scopeTarget(agent, agent), …)`），只投递给同一作用域里的监听者。
+飞书桥是在根作用域注册的，于是永远收不到 —— 表现为 `ask_user_question` 一直挂着、
+卡片不弹，日志里连一条 question 记录都没有。
+
+跑一次补丁即可（幂等，会自动备份 `.orig`）：
+
+```bash
+node scripts/patch-dsh-user-questions.mjs
+```
+
+它把派发改成不带作用域（payload 里的 `agent` 依然保留）：
+
+```js
+this.ctx.waterfall("user-questions/request", { ...request, agent }, noAnswerer)
+```
+
+注意：**dsh 升级后补丁会丢，需要重跑一次**。找不到 dsh 安装位置时，把
+`…/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-user-questions/lib/index.js`
+作为参数传进去。
+
 ## License
 
 MIT
